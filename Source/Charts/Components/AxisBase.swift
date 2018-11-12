@@ -1,5 +1,5 @@
 //
-//  BarChartRenderer.swift
+//  AxisBase.swift
 //  Charts
 //
 //  Copyright 2015 Daniel Cohen Gindi & Philipp Jahoda
@@ -12,759 +12,413 @@
 import Foundation
 import CoreGraphics
 
-#if !os(OSX)
-    import UIKit
-#endif
-
-open class BarChartRenderer: BarLineScatterCandleBubbleRenderer
+/// Base class for all axes
+@objc(ChartAxisBase)
+open class AxisBase: ComponentBase
 {
-    fileprivate class Buffer
+    public override init()
     {
-        var rects = [CGRect]()
+        super.init()
     }
     
-    open weak var dataProvider: BarChartDataProvider?
+    /// Custom formatter that is used instead of the auto-formatter if set
+    fileprivate var _axisValueFormatter: IAxisValueFormatter?
     
-    public init(dataProvider: BarChartDataProvider?, animator: Animator?, viewPortHandler: ViewPortHandler?)
+    open var labelFont = NSUIFont.systemFont(ofSize: 10.0)
+    open var labelTextColor = NSUIColor.black
+    
+    open var axisLineColor = NSUIColor.gray
+    open var axisLineWidth = CGFloat(0.5)
+    open var axisLineDashPhase = CGFloat(0.0)
+    open var axisLineDashLengths: [CGFloat]!
+    
+    open var gridColor = NSUIColor.gray.withAlphaComponent(0.9)
+    open var gridLineWidth = CGFloat(0.5)
+    open var gridLineDashPhase = CGFloat(0.0)
+    open var gridLineDashLengths: [CGFloat]!
+    open var gridLineCap = CGLineCap.butt
+    
+    open var drawGridLinesEnabled = true
+    open var drawAxisLineEnabled = true
+    
+    /// flag that indicates of the labels of this axis should be drawn or not
+    open var drawLabelsEnabled = true
+    
+    fileprivate var _centerAxisLabelsEnabled = false
+
+    /// Centers the axis labels instead of drawing them at their original position.
+    /// This is useful especially for grouped BarChart.
+    open var centerAxisLabelsEnabled: Bool
     {
-        super.init(animator: animator, viewPortHandler: viewPortHandler)
-        
-        self.dataProvider = dataProvider
+        get { return _centerAxisLabelsEnabled && entryCount > 0 }
+        set { _centerAxisLabelsEnabled = newValue }
     }
     
-    // [CGRect] per dataset
-    fileprivate var _buffers = [Buffer]()
-    
-    open override func initBuffers()
+    open var isCenterAxisLabelsEnabled: Bool
     {
-        if let barData = dataProvider?.barData
-        {
-            // Matche buffers count to dataset count
-            if _buffers.count != barData.dataSetCount
-            {
-                while _buffers.count < barData.dataSetCount
-                {
-                    _buffers.append(Buffer())
-                }
-                while _buffers.count > barData.dataSetCount
-                {
-                    _buffers.removeLast()
-                }
-            }
-            
-            for i in stride(from: 0, to: barData.dataSetCount, by: 1)
-            {
-                let set = barData.dataSets[i] as! IBarChartDataSet
-                let size = set.entryCount * (set.isStacked ? set.stackSize : 1)
-                if _buffers[i].rects.count != size
-                {
-                    _buffers[i].rects = [CGRect](repeating: CGRect(), count: size)
-                }
-            }
-        }
-        else
-        {
-            _buffers.removeAll()
-        }
-    }
-    
-    fileprivate func prepareBuffer(dataSet: IBarChartDataSet, index: Int)
-    {
-        guard
-            let dataProvider = dataProvider,
-            let barData = dataProvider.barData,
-            let animator = animator
-            else { return }
-        
-        let barWidthHalf = barData.barWidth / 2.0
-    
-        let buffer = _buffers[index]
-        var bufferIndex = 0
-        let containsStacks = dataSet.isStacked
-        
-        let isInverted = dataProvider.isInverted(axis: dataSet.axisDependency)
-        let phaseY = animator.phaseY
-        var barRect = CGRect()
-        var x: Double
-        var y: Double
-        
-        for i in stride(from: 0, to: min(Int(ceil(Double(dataSet.entryCount) * animator.phaseX)), dataSet.entryCount), by: 1)
-        {
-            guard let e = dataSet.entryForIndex(i) as? BarChartDataEntry else { continue }
-            
-            let vals = e.yValues
-            
-            x = e.x
-            y = e.y
-            
-            if !containsStacks || vals == nil
-            {
-                let left = CGFloat(x - barWidthHalf)
-                let right = CGFloat(x + barWidthHalf)
-                var top = isInverted
-                    ? (y <= 0.0 ? CGFloat(y) : 0)
-                    : (y >= 0.0 ? CGFloat(y) : 0)
-                var bottom = isInverted
-                    ? (y >= 0.0 ? CGFloat(y) : 0)
-                    : (y <= 0.0 ? CGFloat(y) : 0)
-                
-                // multiply the height of the rect with the phase
-                if top > 0
-                {
-                    top *= CGFloat(phaseY)
-                }
-                else
-                {
-                    bottom *= CGFloat(phaseY)
-                }
-                
-                barRect.origin.x = left
-                barRect.size.width = right - left
-                barRect.origin.y = top
-                barRect.size.height = bottom - top
-                
-                buffer.rects[bufferIndex] = barRect
-                bufferIndex += 1
-            }
-            else
-            {
-                var posY = 0.0
-                var negY = -e.negativeSum
-                var yStart = 0.0
-                
-                // fill the stack
-                for k in 0 ..< vals!.count
-                {
-                    let value = vals![k]
-                    
-                    if value == 0.0 && (posY == 0.0 || negY == 0.0)
-                    {
-                        // Take care of the situation of a 0.0 value, which overlaps a non-zero bar
-                        y = value
-                        yStart = y
-                    }
-                    else if value >= 0.0
-                    {
-                        y = posY
-                        yStart = posY + value
-                        posY = yStart
-                    }
-                    else
-                    {
-                        y = negY
-                        yStart = negY + abs(value)
-                        negY += abs(value)
-                    }
-                    
-                    let left = CGFloat(x - barWidthHalf)
-                    let right = CGFloat(x + barWidthHalf)
-                    var top = isInverted
-                        ? (y <= yStart ? CGFloat(y) : CGFloat(yStart))
-                        : (y >= yStart ? CGFloat(y) : CGFloat(yStart))
-                    var bottom = isInverted
-                        ? (y >= yStart ? CGFloat(y) : CGFloat(yStart))
-                        : (y <= yStart ? CGFloat(y) : CGFloat(yStart))
-                    
-                    // multiply the height of the rect with the phase
-                    top *= CGFloat(phaseY)
-                    bottom *= CGFloat(phaseY)
-                    
-                    barRect.origin.x = left
-                    barRect.size.width = right - left
-                    barRect.origin.y = top
-                    barRect.size.height = bottom - top
-                    
-                    buffer.rects[bufferIndex] = barRect
-                    bufferIndex += 1
-                }
-            }
-        }
-    }
-    
-    open override func drawData(context: CGContext)
-    {
-        guard
-            let dataProvider = dataProvider,
-            let barData = dataProvider.barData
-            else { return }
-        
-        for i in 0 ..< barData.dataSetCount
-        {
-            guard let set = barData.getDataSetByIndex(i) else { continue }
-            
-            if set.isVisible
-            {
-                if !(set is IBarChartDataSet)
-                {
-                    fatalError("Datasets for BarChartRenderer must conform to IBarChartDataset")
-                }
-                
-                drawDataSet(context: context, dataSet: set as! IBarChartDataSet, index: i)
-            }
-        }
-    }
-    
-    fileprivate var _barShadowRectBuffer: CGRect = CGRect()
-    
-    open func drawDataSet(context: CGContext, dataSet: IBarChartDataSet, index: Int)
-    {
-        guard
-            let dataProvider = dataProvider,
-            let viewPortHandler = self.viewPortHandler
-            else { return }
-        
-        let trans = dataProvider.getTransformer(forAxis: dataSet.axisDependency)
-        
-        prepareBuffer(dataSet: dataSet, index: index)
-        trans.rectValuesToPixel(&_buffers[index].rects)
-        
-        let borderWidth = dataSet.barBorderWidth
-        let borderColor = dataSet.barBorderColor
-        let drawBorder = borderWidth > 0.0
-        
-        context.saveGState()
-        
-        // draw the bar shadow before the values
-        if dataProvider.isDrawBarShadowEnabled
-        {
-            guard
-                let animator = animator,
-                let barData = dataProvider.barData
-                else { return }
-            
-            let barWidth = barData.barWidth
-            let barWidthHalf = barWidth / 2.0
-            var x: Double = 0.0
-            
-            for i in stride(from: 0, to: min(Int(ceil(Double(dataSet.entryCount) * animator.phaseX)), dataSet.entryCount), by: 1)
-            {
-                guard let e = dataSet.entryForIndex(i) as? BarChartDataEntry else { continue }
-                
-                x = e.x
-                
-                _barShadowRectBuffer.origin.x = CGFloat(x - barWidthHalf)
-                _barShadowRectBuffer.size.width = CGFloat(barWidth)
-                
-                trans.rectValueToPixel(&_barShadowRectBuffer)
-                
-                if !viewPortHandler.isInBoundsLeft(_barShadowRectBuffer.origin.x + _barShadowRectBuffer.size.width)
-                {
-                    continue
-                }
-                
-                if !viewPortHandler.isInBoundsRight(_barShadowRectBuffer.origin.x)
-                {
-                    break
-                }
-                
-                _barShadowRectBuffer.origin.y = viewPortHandler.contentTop
-                _barShadowRectBuffer.size.height = viewPortHandler.contentHeight
-                
-                context.setFillColor(dataSet.barShadowColor.cgColor)
-                context.fill(_barShadowRectBuffer)
-            }
-        }
-        
-        let buffer = _buffers[index]
-        
-        // draw the bar shadow before the values
-        if dataProvider.isDrawBarShadowEnabled
-        {
-            for j in stride(from: 0, to: buffer.rects.count, by: 1)
-            {
-                let barRect = buffer.rects[j]
-                
-                if (!viewPortHandler.isInBoundsLeft(barRect.origin.x + barRect.size.width))
-                {
-                    continue
-                }
-                
-                if (!viewPortHandler.isInBoundsRight(barRect.origin.x))
-                {
-                    break
-                }
-                
-                context.setFillColor(dataSet.barShadowColor.cgColor)
-                context.fill(barRect)
-            }
-        }
-        
-        let isSingleColor = dataSet.colors.count == 1
-        
-        if isSingleColor
-        {
-            context.setFillColor(dataSet.color(atIndex: 0).cgColor)
-        }
-        
-        for j in stride(from: 0, to: buffer.rects.count, by: 1)
-        {
-            let barRect = buffer.rects[j]
-            
-            if (!viewPortHandler.isInBoundsLeft(barRect.origin.x + barRect.size.width))
-            {
-                continue
-            }
-            
-            if (!viewPortHandler.isInBoundsRight(barRect.origin.x))
-            {
-                break
-            }
-            
-            if !isSingleColor
-            {
-                // Set the color for the currently drawn value. If the index is out of bounds, reuse colors.
-                context.setFillColor(dataSet.color(atIndex: j).cgColor)
-            }
-            
-            context.fill(barRect)
-            
-            if drawBorder
-            {
-                context.setStrokeColor(borderColor.cgColor)
-                context.setLineWidth(borderWidth)
-                context.stroke(barRect)
-            }
-        }
-        
-        context.restoreGState()
-    }
-    
-    open func prepareBarHighlight(
-        x: Double,
-          y1: Double,
-          y2: Double,
-          barWidthHalf: Double,
-          trans: Transformer,
-          rect: inout CGRect)
-    {
-        let left = x - barWidthHalf
-        let right = x + barWidthHalf
-        let top = y1
-        let bottom = y2
-        
-        rect.origin.x = CGFloat(left)
-        rect.origin.y = CGFloat(top)
-        rect.size.width = CGFloat(right - left)
-        rect.size.height = CGFloat(bottom - top)
-        
-        trans.rectValueToPixel(&rect, phaseY: animator?.phaseY ?? 1.0)
+        get { return centerAxisLabelsEnabled }
     }
 
-    open override func drawValues(context: CGContext)
-    {
-        // if values are drawn
-        if isDrawingValuesAllowed(dataProvider: dataProvider)
-        {
-            guard
-                let dataProvider = dataProvider,
-                let viewPortHandler = self.viewPortHandler,
-                let barData = dataProvider.barData,
-                let animator = animator
-                else { return }
-            
-            var dataSets = barData.dataSets
+    /// array of limitlines that can be set for the axis
+    fileprivate var _limitLines = [ChartLimitLine]()
+    
+    /// Are the LimitLines drawn behind the data or in front of the data?
+    /// 
+    /// **default**: false
+    open var drawLimitLinesBehindDataEnabled = false
 
-            let valueOffsetPlus: CGFloat = 4.5
-            var posOffset: CGFloat
-            var negOffset: CGFloat
-            let drawValueAboveBar = dataProvider.isDrawValueAboveBarEnabled
-            
-            for dataSetIndex in 0 ..< barData.dataSetCount
-            {
-                guard let dataSet = dataSets[dataSetIndex] as? IBarChartDataSet else { continue }
-                
-                if !shouldDrawValues(forDataSet: dataSet)
-                {
-                    continue
-                }
-                
-                let isInverted = dataProvider.isInverted(axis: dataSet.axisDependency)
-                
-                // calculate the correct offset depending on the draw position of the value
-                let valueFont = dataSet.valueFont
-                let valueTextHeight = valueFont.lineHeight
-                posOffset = (drawValueAboveBar ? -(valueTextHeight + valueOffsetPlus) : valueOffsetPlus)
-                negOffset = (drawValueAboveBar ? valueOffsetPlus : -(valueTextHeight + valueOffsetPlus))
-                
-                if isInverted
-                {
-                    posOffset = -posOffset - valueTextHeight
-                    negOffset = -negOffset - valueTextHeight
-                }
-                
-                let buffer = _buffers[dataSetIndex]
-                
-                guard let formatter = dataSet.valueFormatter else { continue }
-                
-                let trans = dataProvider.getTransformer(forAxis: dataSet.axisDependency)
-                
-                let phaseY = animator.phaseY
-                
-                let iconsOffset = dataSet.iconsOffset
-        
-                // if only single values are drawn (sum)
-                if !dataSet.isStacked
-                {
-                    for j in 0 ..< Int(ceil(Double(dataSet.entryCount) * animator.phaseX))
-                    {
-                        guard let e = dataSet.entryForIndex(j) as? BarChartDataEntry else { continue }
-                        
-                        let rect = buffer.rects[j]
-                        
-                        let x = rect.origin.x + rect.size.width / 2.0
-                        
-                        if !viewPortHandler.isInBoundsRight(x)
-                        {
-                            break
-                        }
-                        
-                        if !viewPortHandler.isInBoundsY(rect.origin.y)
-                            || !viewPortHandler.isInBoundsLeft(x)
-                        {
-                            continue
-                        }
-                        
-                        let val = e.y
-                        
-                        if dataSet.isDrawValuesEnabled
-                        {
-//                            drawValue(
-//                                context: context,
-//                                value: formatter.stringForValue(
-//                                    val,
-//                                    entry: e,
-//                                    dataSetIndex: dataSetIndex,
-//                                    viewPortHandler: viewPortHandler),
-//                                xPos: x,
-//                                yPos: val >= 0.0
-//                                    ? (rect.origin.y + posOffset)
-//                                    : (rect.origin.y + rect.size.height + negOffset),
-//                                font: valueFont,
-//                                align: .center,
-//                                color: dataSet.valueTextColorAt(j))
-                            
-//                            context.rotate(by: CGFloat(-90))
-//                            
-//                            let value = formatter.stringForValue(
-//                                val,
-//                                entry: e,
-//                                dataSetIndex: dataSetIndex,
-//                                viewPortHandler: viewPortHandler)
-                            
-                            let numberFormatter = NumberFormatter()
-                            numberFormatter.minimumIntegerDigits = 1
-                            numberFormatter.maximumFractionDigits = 2
-                            numberFormatter.minimumFractionDigits = 2
-                            numberFormatter.locale = Locale(identifier: "pt_BR")
-                            let value = numberFormatter.string(from: val as NSNumber)!
-//
-//                            drawValue(context: context, value: "teste",
-//                                      xPos: x, yPos: rect.origin.y + rect.size.height - 30,
-//                                      font: valueFont, align: .center,
-//                                      color: UIColor.black)
-//                            
-//                            context.rotate(by: CGFloat(90))
-                            
-                            //let text = "teste"
-                            let fontSize = valueFont.pointSize + 4
-                            let font = NSUIFont(name: valueFont.fontName, size: fontSize)!
-                            let attr = [NSFontAttributeName: font, NSForegroundColorAttributeName: UIColor.white]
-                            let xPos = x
-                            let yPos = rect.origin.y + rect.size.height - 30
-                            //let xTranslate = (xPos + value.size(attributes: attr).width) / 2
-                            //let yTranslate = (yPos + value.size(attributes: attr).height) / 2
-                            let xTranslate = (xPos - 5)
-                            let yTranslate = (yPos + 5)
-                            
-                            
-                            
-                            //valueFont.pointSize += 2
-                            
-                            
-                            
-                            
-                            context.saveGState()
-                            context.translateBy(x: xTranslate, y: yTranslate)
-                            context.rotate(by: CGFloat((M_PI * 90 * -1) / 180))
-                            
-                            
-                            
-                            (value as NSString).draw(at: CGPoint(x: 0, y: 0),
-                                withAttributes: attr)
-                            
-                            
-                            
-//                            drawValue(context: context, value: "teste",
-//                                      xPos: 0, yPos: 0,
-//                                      font: font, align: .left,
-//                                      color: UIColor.black)
-//                            
-//                            
-//                            context.beginPath()
-//                            context.move(to: CGPoint(x: xPos, y: yPos + 10))
-//                            context.addLine(to: CGPoint(x: xPos+50, y: yPos + 10))
-//                            context.setStrokeColor(UIColor.red.cgColor)
-//                            context.setLineWidth(2)
-//                            context.strokePath()
-                            
-                            
-                            context.restoreGState()
-                            
-                            
-                            
-                        }
-                        
-                        if let icon = e.icon, dataSet.isDrawIconsEnabled
-                        {
-                            var px = x
-                            var py = val >= 0.0
-                                ? (rect.origin.y + posOffset)
-                                : (rect.origin.y + rect.size.height + negOffset)
-                            
-                            px += iconsOffset.x
-                            py += iconsOffset.y
-                            
-                            ChartUtils.drawImage(
-                                context: context,
-                                image: icon,
-                                x: px,
-                                y: py,
-                                size: icon.size)
-                        }
-                    }
-                }
-                else
-                {
-                    // if we have stacks
-                    
-                    var bufferIndex = 0
-                    
-                    for index in 0 ..< Int(ceil(Double(dataSet.entryCount) * animator.phaseX))
-                    {
-                        guard let e = dataSet.entryForIndex(index) as? BarChartDataEntry else { continue }
-                        
-                        let vals = e.yValues
-                        
-                        let rect = buffer.rects[bufferIndex]
-                        
-                        let x = rect.origin.x + rect.size.width / 2.0
-                        
-                        // we still draw stacked bars, but there is one non-stacked in between
-                        if vals == nil
-                        {
-                            if !viewPortHandler.isInBoundsRight(x)
-                            {
-                                break
-                            }
-                            
-                            if !viewPortHandler.isInBoundsY(rect.origin.y)
-                                || !viewPortHandler.isInBoundsLeft(x)
-                            {
-                                continue
-                            }
-                            
-                            if dataSet.isDrawValuesEnabled
-                            {
-                                drawValue(
-                                    context: context,
-                                    value: formatter.stringForValue(
-                                        e.y,
-                                        entry: e,
-                                        dataSetIndex: dataSetIndex,
-                                        viewPortHandler: viewPortHandler),
-                                    xPos: x,
-                                    yPos: rect.origin.y +
-                                        (e.y >= 0 ? posOffset : negOffset),
-                                    font: valueFont,
-                                    align: .center,
-                                    color: dataSet.valueTextColorAt(index))
-                            }
-                            
-                            if let icon = e.icon, dataSet.isDrawIconsEnabled
-                            {
-                                var px = x
-                                var py = rect.origin.y +
-                                    (e.y >= 0 ? posOffset : negOffset)
-                                
-                                px += iconsOffset.x
-                                py += iconsOffset.y
-                                
-                                ChartUtils.drawImage(
-                                    context: context,
-                                    image: icon,
-                                    x: px,
-                                    y: py,
-                                    size: icon.size)
-                            }
-                        }
-                        else
-                        {
-                            // draw stack values
-                            
-                            let vals = vals!
-                            var transformed = [CGPoint]()
-                            
-                            var posY = 0.0
-                            var negY = -e.negativeSum
-                            
-                            for k in 0 ..< vals.count
-                            {
-                                let value = vals[k]
-                                var y: Double
-                                
-                                if value == 0.0 && (posY == 0.0 || negY == 0.0)
-                                {
-                                    // Take care of the situation of a 0.0 value, which overlaps a non-zero bar
-                                    y = value
-                                }
-                                else if value >= 0.0
-                                {
-                                    posY += value
-                                    y = posY
-                                }
-                                else
-                                {
-                                    y = negY
-                                    negY -= value
-                                }
-                                
-                                transformed.append(CGPoint(x: 0.0, y: CGFloat(y * phaseY)))
-                            }
-                            
-                            trans.pointValuesToPixel(&transformed)
-                            
-                            for k in 0 ..< transformed.count
-                            {
-                                let val = vals[k]
-                                let drawBelow = (val == 0.0 && negY == 0.0 && posY > 0.0) || val < 0.0
-                                let y = transformed[k].y + (drawBelow ? negOffset : posOffset)
-                                
-                                if !viewPortHandler.isInBoundsRight(x)
-                                {
-                                    break
-                                }
-                                
-                                if !viewPortHandler.isInBoundsY(y) || !viewPortHandler.isInBoundsLeft(x)
-                                {
-                                    continue
-                                }
-                                
-                                if dataSet.isDrawValuesEnabled
-                                {
-                                    drawValue(
-                                        context: context,
-                                        value: formatter.stringForValue(
-                                            vals[k],
-                                            entry: e,
-                                            dataSetIndex: dataSetIndex,
-                                            viewPortHandler: viewPortHandler),
-                                        xPos: x,
-                                        yPos: y,
-                                        font: valueFont,
-                                        align: .center,
-                                        color: dataSet.valueTextColorAt(index))
-                                }
-                                
-                                if let icon = e.icon, dataSet.isDrawIconsEnabled
-                                {
-                                    ChartUtils.drawImage(
-                                        context: context,
-                                        image: icon,
-                                        x: x + iconsOffset.x,
-                                        y: y + iconsOffset.y,
-                                        size: icon.size)
-                                }
-                            }
-                        }
-                        
-                        bufferIndex = vals == nil ? (bufferIndex + 1) : (bufferIndex + vals!.count)
-                    }
-                }
-            }
-        }
-    }
+    /// the flag can be used to turn off the antialias for grid lines
+    open var gridAntialiasEnabled = true
     
-    /// Draws a value at the specified x and y position.
-    open func drawValue(context: CGContext, value: String, xPos: CGFloat, yPos: CGFloat, font: NSUIFont, align: NSTextAlignment, color: NSUIColor)
-    {
-        ChartUtils.drawText(context: context, text: value, point: CGPoint(x: xPos, y: yPos), align: align, attributes: [NSFontAttributeName: font, NSForegroundColorAttributeName: color])
-    }
+    /// the actual array of entries
+    open var entries = [Double]()
     
-    open override func drawExtras(context: CGContext)
-    {
-        
-    }
+    /// axis label entries only used for centered labels
+    open var centeredEntries = [Double]()
     
-    open override func drawHighlighted(context: CGContext, indices: [Highlight])
+    /// the number of entries the legend contains
+    open var entryCount: Int { return entries.count }
+    
+    /// the number of label entries the axis should have
+    ///
+    /// **default**: 6
+    fileprivate var _labelCount = Int(6)
+    
+    /// the number of decimal digits to use (for the default formatter
+    open var decimals: Int = 0
+    
+    /// When true, axis labels are controlled by the `granularity` property.
+    /// When false, axis values could possibly be repeated.
+    /// This could happen if two adjacent axis values are rounded to same value.
+    /// If using granularity this could be avoided by having fewer axis values visible.
+    open var granularityEnabled = false
+    
+    fileprivate var _granularity = Double(1.0)
+    
+    /// The minimum interval between axis values.
+    /// This can be used to avoid label duplicating when zooming in.
+    ///
+    /// **default**: 1.0
+    open var granularity: Double
     {
-        guard
-            let dataProvider = dataProvider,
-            let barData = dataProvider.barData
-            else { return }
-        
-        context.saveGState()
-        
-        var barRect = CGRect()
-        
-        for high in indices
+        get
         {
-            guard
-                let set = barData.getDataSetByIndex(high.dataSetIndex) as? IBarChartDataSet,
-                set.isHighlightEnabled
-                else { continue }
+            return _granularity
+        }
+        set
+        {
+            _granularity = newValue
             
-            if let e = set.entryForXValue(high.x, closestToY: high.y) as? BarChartDataEntry
+            // set this to `true` if it was disabled, as it makes no sense to set this property with granularity disabled
+            granularityEnabled = true
+        }
+    }
+    
+    /// The minimum interval between axis values.
+    open var isGranularityEnabled: Bool
+    {
+        get
+        {
+            return granularityEnabled
+        }
+    }
+    
+    /// if true, the set number of y-labels will be forced
+    open var forceLabelsEnabled = false
+    
+    open func getLongestLabel() -> String
+    {
+        var longest = ""
+        
+        for i in 0 ..< entries.count
+        {
+            let text = getFormattedLabel(i)
+            
+            if longest.characters.count < text.characters.count
             {
-                if !isInBoundsX(entry: e, dataSet: set)
-                {
-                    continue
-                }
-                
-                let trans = dataProvider.getTransformer(forAxis: set.axisDependency)
-                
-                context.setFillColor(set.highlightColor.cgColor)
-                context.setAlpha(set.highlightAlpha)
-                
-                let isStack = high.stackIndex >= 0 && e.isStacked
-                
-                let y1: Double
-                let y2: Double
-                
-                if isStack
-                {
-                    if dataProvider.isHighlightFullBarEnabled
-                    {
-                        y1 = e.positiveSum
-                        y2 = -e.negativeSum
-                    }
-                    else
-                    {
-                        let range = e.ranges?[high.stackIndex]
-                        
-                        y1 = range?.from ?? 0.0
-                        y2 = range?.to ?? 0.0
-                    }
-                }
-                else
-                {
-                    y1 = e.y
-                    y2 = 0.0
-                }
-                
-                prepareBarHighlight(x: e.x, y1: y1, y2: y2, barWidthHalf: barData.barWidth / 2.0, trans: trans, rect: &barRect)
-                
-                setHighlightDrawPos(highlight: high, barRect: barRect)
-                
-                context.fill(barRect)
+                longest = text
             }
         }
         
-        context.restoreGState()
+        return longest
     }
     
-    /// Sets the drawing position of the highlight object based on the riven bar-rect.
-    internal func setHighlightDrawPos(highlight high: Highlight, barRect: CGRect)
+    /// - returns: The formatted label at the specified index. This will either use the auto-formatter or the custom formatter (if one is set).
+    open func getFormattedLabel(_ index: Int) -> String
     {
-        high.setDraw(x: barRect.midX, y: barRect.origin.y)
+        if index < 0 || index >= entries.count
+        {
+            return ""
+        }
+        
+        let vf = valueFormatter?.stringForValue(entries[0], axis: self) ?? ""
+        
+        let fmt = valueFormatter?.stringForValue(entries[index], axis: self) ?? ""
+        
+        if vf.characters.count > 1
+        {
+            let firstChar = String(vf.characters.first!)
+            let secondChar = String(vf.characters.dropFirst().first!)
+            
+            if firstChar == "R" && secondChar == "$"
+            {
+                let numberFormatter = NumberFormatter()
+                numberFormatter.numberStyle = .currency
+                numberFormatter.minimumIntegerDigits = 1
+                numberFormatter.maximumFractionDigits = 2
+                numberFormatter.minimumFractionDigits = 2
+                numberFormatter.locale = Locale(identifier: "pt_BR")
+                let result = numberFormatter.string(from: entries[index] as NSNumber)
+                return result!
+            }
+            
+            if firstChar == "F" && secondChar == "|"
+            {
+                let numberFormatter = NumberFormatter()
+                let digits = Int(String(vf.characters.dropFirst(2)))!
+                numberFormatter.minimumIntegerDigits = 1
+                numberFormatter.maximumFractionDigits = digits
+                numberFormatter.minimumFractionDigits = digits
+                numberFormatter.locale = Locale(identifier: "pt_BR")
+                let result = numberFormatter.string(from: entries[index] as NSNumber)
+                return result!
+            }
+            
+        }
+        
+        return fmt
+        
+//        if (fmt.characters.count > 1) {
+//            if (fmt.charAt(0) == 'R' && fmt.charAt(1) == '$')
+//            return String.format(new Locale("pt", "BR"), "R$%.2f", mEntries[index]);
+//            
+//            if (fmt.charAt(0) == 'F' && fmt.charAt(1) == '|')
+//            return String.format(new Locale("pt", "BR"),
+//                                 "%." + fmt.charAt(2) + "f", mEntries[index]);
+//        }
+        
+        
+        //return valueFormatter?.stringForValue(entries[index], axis: self) ?? ""
+    }
+    
+    /// Sets the formatter to be used for formatting the axis labels.
+    /// If no formatter is set, the chart will automatically determine a reasonable formatting (concerning decimals) for all the values that are drawn inside the chart.
+    /// Use `nil` to use the formatter calculated by the chart.
+    open var valueFormatter: IAxisValueFormatter?
+    {
+        get
+        {
+            if _axisValueFormatter == nil ||
+                (_axisValueFormatter is DefaultAxisValueFormatter &&
+                    (_axisValueFormatter as! DefaultAxisValueFormatter).hasAutoDecimals &&
+                    (_axisValueFormatter as! DefaultAxisValueFormatter).decimals != decimals)
+            {
+                _axisValueFormatter = DefaultAxisValueFormatter(decimals: decimals)
+            }
+            
+            return _axisValueFormatter
+        }
+        set
+        {
+            _axisValueFormatter = newValue ?? DefaultAxisValueFormatter(decimals: decimals)
+        }
+    }
+    
+    open var isDrawGridLinesEnabled: Bool { return drawGridLinesEnabled }
+    
+    open var isDrawAxisLineEnabled: Bool { return drawAxisLineEnabled }
+    
+    open var isDrawLabelsEnabled: Bool { return drawLabelsEnabled }
+    
+    /// Are the LimitLines drawn behind the data or in front of the data?
+    /// 
+    /// **default**: false
+    open var isDrawLimitLinesBehindDataEnabled: Bool { return drawLimitLinesBehindDataEnabled }
+    
+    /// Extra spacing for `axisMinimum` to be added to automatically calculated `axisMinimum`
+    open var spaceMin: Double = 0.0
+    
+    /// Extra spacing for `axisMaximum` to be added to automatically calculated `axisMaximum`
+    open var spaceMax: Double = 0.0
+    
+    /// Flag indicating that the axis-min value has been customized
+    internal var _customAxisMin: Bool = false
+    
+    /// Flag indicating that the axis-max value has been customized
+    internal var _customAxisMax: Bool = false
+    
+    /// Do not touch this directly, instead, use axisMinimum.
+    /// This is automatically calculated to represent the real min value,
+    /// and is used when calculating the effective minimum.
+    internal var _axisMinimum = Double(0)
+    
+    /// Do not touch this directly, instead, use axisMaximum.
+    /// This is automatically calculated to represent the real max value,
+    /// and is used when calculating the effective maximum.
+    internal var _axisMaximum = Double(0)
+    
+    /// the total range of values this axis covers
+    open var axisRange = Double(0)
+    
+    /// the number of label entries the axis should have
+    /// max = 25,
+    /// min = 2,
+    /// default = 6,
+    /// be aware that this number is not fixed and can only be approximated
+    open var labelCount: Int
+    {
+        get
+        {
+            return _labelCount
+        }
+        set
+        {
+            _labelCount = newValue
+            
+            if _labelCount > 25
+            {
+                _labelCount = 25
+            }
+            if _labelCount < 2
+            {
+                _labelCount = 2
+            }
+            
+            forceLabelsEnabled = false
+        }
+    }
+    
+    open func setLabelCount(_ count: Int, force: Bool)
+    {
+        self.labelCount = count
+        forceLabelsEnabled = force
+    }
+    
+    /// - returns: `true` if focing the y-label count is enabled. Default: false
+    open var isForceLabelsEnabled: Bool { return forceLabelsEnabled }
+    
+    /// Adds a new ChartLimitLine to this axis.
+    open func addLimitLine(_ line: ChartLimitLine)
+    {
+        _limitLines.append(line)
+    }
+    
+    /// Removes the specified ChartLimitLine from the axis.
+    open func removeLimitLine(_ line: ChartLimitLine)
+    {
+        for i in 0 ..< _limitLines.count
+        {
+            if _limitLines[i] === line
+            {
+                _limitLines.remove(at: i)
+                return
+            }
+        }
+    }
+    
+    /// Removes all LimitLines from the axis.
+    open func removeAllLimitLines()
+    {
+        _limitLines.removeAll(keepingCapacity: false)
+    }
+    
+    /// - returns: The LimitLines of this axis.
+    open var limitLines : [ChartLimitLine]
+    {
+        return _limitLines
+    }
+    
+    // MARK: Custom axis ranges
+    
+    /// By calling this method, any custom minimum value that has been previously set is reseted, and the calculation is done automatically.
+    open func resetCustomAxisMin()
+    {
+        _customAxisMin = false
+    }
+    
+    open var isAxisMinCustom: Bool { return _customAxisMin }
+    
+    /// By calling this method, any custom maximum value that has been previously set is reseted, and the calculation is done automatically.
+    open func resetCustomAxisMax()
+    {
+        _customAxisMax = false
+    }
+    
+    open var isAxisMaxCustom: Bool { return _customAxisMax }
+    
+    /// This property is deprecated - Use `axisMinimum` instead.
+    @available(*, deprecated: 1.0, message: "Use axisMinimum instead.")
+    open var axisMinValue: Double
+    {
+        get { return axisMinimum }
+        set { axisMinimum = newValue }
+    }
+    
+    /// This property is deprecated - Use `axisMaximum` instead.
+    @available(*, deprecated: 1.0, message: "Use axisMaximum instead.")
+    open var axisMaxValue: Double
+    {
+        get { return axisMaximum }
+        set { axisMaximum = newValue }
+    }
+    
+    /// The minimum value for this axis.
+    /// If set, this value will not be calculated automatically depending on the provided data.
+    /// Use `resetCustomAxisMin()` to undo this.
+    open var axisMinimum: Double
+    {
+        get
+        {
+            return _axisMinimum
+        }
+        set
+        {
+            _customAxisMin = true
+            _axisMinimum = newValue
+            axisRange = abs(_axisMaximum - newValue)
+        }
+    }
+    
+    /// The maximum value for this axis.
+    /// If set, this value will not be calculated automatically depending on the provided data.
+    /// Use `resetCustomAxisMax()` to undo this.
+    open var axisMaximum: Double
+    {
+        get
+        {
+            return _axisMaximum
+        }
+        set
+        {
+            _customAxisMax = true
+            _axisMaximum = newValue
+            axisRange = abs(newValue - _axisMinimum)
+        }
+    }
+    
+    /// Calculates the minimum, maximum and range values of the YAxis with the given minimum and maximum values from the chart data.
+    /// - parameter dataMin: the y-min value according to chart data
+    /// - parameter dataMax: the y-max value according to chart
+    open func calculate(min dataMin: Double, max dataMax: Double)
+    {
+        // if custom, use value as is, else use data value
+        var min = _customAxisMin ? _axisMinimum : (dataMin - spaceMin)
+        var max = _customAxisMax ? _axisMaximum : (dataMax + spaceMax)
+        
+        // temporary range (before calculations)
+        let range = abs(max - min)
+        
+        // in case all values are equal
+        if range == 0.0
+        {
+            max = max + 1.0
+            min = min - 1.0
+        }
+        
+        _axisMinimum = min
+        _axisMaximum = max
+        
+        // actual range
+        axisRange = abs(max - min)
     }
 }
