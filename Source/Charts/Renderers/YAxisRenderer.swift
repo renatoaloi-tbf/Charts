@@ -416,23 +416,11 @@ open class YAxisRenderer: AxisRendererBase
                 }
                 else if l.labelPosition == .leftBox
                 {
-                    //                    float leftPos = mViewPortHandler.contentLeft() - 85;
-                    //                    float topPos = pts[1] - 20;
-                    //                    float bottomPos = topPos + 40;
-                    //                    float rightPos = leftPos + 85;
-                    //                    mLimitLinePaint.setColor(l.getLineColor());
-                    //                    c.drawRoundRect(leftPos, topPos, rightPos, bottomPos,
-                    //                                    4.0f, 4.0f, mLimitLinePaint);
-                    //                    mLimitLinePaint.setColor(l.getTextColor());
-                    //                    float xoffset = mYAxis.getXOffset();
-                    //                    float xPos = mViewPortHandler.offsetLeft() - xoffset;
-                    //                    mLimitLinePaint.setTextAlign(Align.RIGHT);
-                    //                    c.drawText(label, xPos, topPos + 30, mLimitLinePaint);
-                    
-                    let leftPos = viewPortHandler.contentLeft - 29
+                    // LARANJA VOLUME
+                    let leftPos = viewPortHandler.contentLeft - 39 
                     let topPos = position.y - 9
                     let bottomPos = CGFloat(16.0)
-                    let rightPos = CGFloat(36.0)
+                    let rightPos = CGFloat(leftPos + 45) 
                     
                     context.beginPath()
                     context.setFillColor(l.lineColor.cgColor)
@@ -444,20 +432,18 @@ open class YAxisRenderer: AxisRendererBase
                     context.addPath(clipPath)
                     context.closePath()
                     context.fillPath()
-                    
-                    
-                    
-                    //context.addRect(rect)
-                    //context.drawPath(using: .fillStroke)
-                    
-                    ChartUtils.drawText(context: context,
-                                        text: label,
-                                        point: CGPoint(
-                                            x: viewPortHandler.contentLeft - (xOffset - 10),
-                                            y: topPos + 1),
-                                        align: .right,
-                                        attributes: [NSFontAttributeName: yAxis.labelFont, NSForegroundColorAttributeName: l.valueTextColor])
-                    
+
+                    let textOffset = label.characters.count >= 5 ? (l.xOffset - 5) : l.xOffset
+                    ChartUtils.drawText(
+                        context: context,
+                        text: label,
+                        point: CGPoint(
+                            x: viewPortHandler.contentLeft - textOffset,
+                            y: topPos + 0.5
+                        ),
+                        align: .right,
+                        attributes: [NSFontAttributeName: yAxis.labelFont, NSForegroundColorAttributeName: l.valueTextColor]
+                    )
                     
                 }
                 else if l.labelPosition == .rightBox
